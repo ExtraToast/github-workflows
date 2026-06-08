@@ -145,7 +145,7 @@ jobs:
             -e SPRING_RABBITMQ_USERNAME=guest \
             -e SPRING_RABBITMQ_PASSWORD=guest \
             -e SERVER_PORT="${SERVER_PORT}" \
-            ${EXTRA_DOCKER_RUN_ARGS} \
+            "${EXTRA_DOCKER_RUN_ARGS}" \
             ${{ matrix.service }}-crac-train:local
           exit_code=$?
           set -e
