@@ -1,0 +1,104 @@
+name: Docker Compose System-Test Stack
+description: Design-first skeleton for future Docker Compose CI/system-test stack orchestration.
+
+inputs:
+  compose-files:
+    description: Newline-separated compose files, evaluated by the caller repository.
+    required: false
+    default: |-
+      docker-compose.yml
+      docker-compose.ci.yml
+  services:
+    description: Space-separated compose services to start. Empty means the caller's full selected stack.
+    required: false
+    default: ''
+  project-name:
+    description: Optional Docker Compose project name.
+    required: false
+    default: ''
+  working-directory:
+    description: Directory containing the compose files and caller-owned hook scripts.
+    required: false
+    default: .
+  wait-strategy:
+    description: Planned wait mode. Supported skeleton values are compose-wait, command, routes, or none.
+    required: false
+    default: compose-wait
+  wait-command:
+    description: Caller-owned command for wait-strategy=command.
+    required: false
+    default: ''
+  wait-routes-file:
+    description: Caller-owned route list for wait-strategy=routes.
+    required: false
+    default: ''
+  migration-check-command:
+    description: Optional caller-owned command that verifies migrations after stack startup.
+    required: false
+    default: ''
+  diagnostics-command:
+    description: Optional caller-owned diagnostics command for failures.
+    required: false
+    default: ''
+  cleanup-command:
+    description: Optional caller-owned cleanup command run by a future implementation.
+    required: false
+    default: ''
+  up-args:
+    description: Extra docker compose up arguments planned for a future implementation.
+    required: false
+    default: --no-build --wait --timeout 300
+  down-on-complete:
+    description: Whether a future implementation should run docker compose down at completion.
+    required: false
+    default: 'true'
+  placeholder-ack:
+    description: Set to true only when intentionally exercising this design-first placeholder.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Refuse accidental production use
+      shell: bash
+      env:
+        PLACEHOLDER_ACK: ${{ inputs.placeholder-ack }}
+      run: |
+        set -euo pipefail
+        if [ "$PLACEHOLDER_ACK" != "true" ]; then
+          echo "::error::compose-system-test-stack is a design-first skeleton and does not start Docker Compose services yet."
+          echo "::error::Set placeholder-ack=true only in placeholder tests or examples."
+          exit 1
+        fi
+
+    - name: Print planned Compose stack inputs
+      shell: bash
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+        SERVICES: ${{ inputs.services }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        WAIT_STRATEGY: ${{ inputs.wait-strategy }}
+        WAIT_COMMAND: ${{ inputs.wait-command }}
+        WAIT_ROUTES_FILE: ${{ inputs.wait-routes-file }}
+        MIGRATION_CHECK_COMMAND: ${{ inputs.migration-check-command }}
+        DIAGNOSTICS_COMMAND: ${{ inputs.diagnostics-command }}
+        CLEANUP_COMMAND: ${{ inputs.cleanup-command }}
+        UP_ARGS: ${{ inputs.up-args }}
+        DOWN_ON_COMPLETE: ${{ inputs.down-on-complete }}
+      run: |
+        set -euo pipefail
+        echo "Design-first placeholder only. Planned inputs:"
+        printf 'compose-files=%s\n' "$COMPOSE_FILES"
+        printf 'services=%s\n' "$SERVICES"
+        printf 'project-name=%s\n' "$PROJECT_NAME"
+        printf 'working-directory=%s\n' "$WORKING_DIRECTORY"
+        printf 'wait-strategy=%s\n' "$WAIT_STRATEGY"
+        printf 'wait-command=%s\n' "$WAIT_COMMAND"
+        printf 'wait-routes-file=%s\n' "$WAIT_ROUTES_FILE"
+        printf 'migration-check-command=%s\n' "$MIGRATION_CHECK_COMMAND"
+        printf 'diagnostics-command=%s\n' "$DIAGNOSTICS_COMMAND"
+        printf 'cleanup-command=%s\n' "$CLEANUP_COMMAND"
+        printf 'up-args=%s\n' "$UP_ARGS"
+        printf 'down-on-complete=%s\n' "$DOWN_ON_COMPLETE"

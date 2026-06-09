@@ -31,8 +31,8 @@ def fixture_repo():
         run(["git", "init", "-b", "main"], repo)
         run(["git", "config", "user.email", "test@example.invalid"], repo)
         run(["git", "config", "user.name", "Test User"], repo)
-        write(repo / "services/auth-api/src/main/resources/db/migration/V1__init.sql", "select 1;\n")
-        write(repo / "services/auth-api/src/main/resources/db/migration/V2__next.sql", "select 2;\n")
+        write(repo / "services/example-api/src/main/resources/db/migration/V1__init.sql", "select 1;\n")
+        write(repo / "services/example-api/src/main/resources/db/migration/V2__next.sql", "select 2;\n")
         write(repo / "README.md", "fixture\n")
         run(["git", "add", "."], repo)
         run(["git", "commit", "-m", "base"], repo)
@@ -66,33 +66,33 @@ class CheckMigrationsTest(unittest.TestCase):
 
     def test_rejects_modified_existing_migration(self) -> None:
         with fixture_repo() as repo:
-            write(repo / "services/auth-api/src/main/resources/db/migration/V1__init.sql", "select 10;\n")
+            write(repo / "services/example-api/src/main/resources/db/migration/V1__init.sql", "select 10;\n")
             run(["git", "add", "."], repo)
             run(["git", "commit", "-m", "modify migration"], repo)
             self.assertEqual(main(["--base-ref", "base"]), 1)
 
     def test_allows_modified_existing_migration_with_override(self) -> None:
         with fixture_repo() as repo:
-            write(repo / "services/auth-api/src/main/resources/db/migration/V1__init.sql", "select 10;\n")
+            write(repo / "services/example-api/src/main/resources/db/migration/V1__init.sql", "select 10;\n")
             run(["git", "add", "."], repo)
             run(["git", "commit", "-m", "modify migration"], repo)
             self.assertEqual(main(["--base-ref", "base", "--allow-change"]), 0)
 
     def test_rejects_new_migration_below_base_max(self) -> None:
         with fixture_repo() as repo:
-            write(repo / "services/auth-api/src/main/resources/db/migration/V1_1__late.sql", "select 11;\n")
+            write(repo / "services/example-api/src/main/resources/db/migration/V1_1__late.sql", "select 11;\n")
             run(["git", "add", "."], repo)
             self.assertEqual(main(["--base-ref", "base"]), 1)
 
     def test_allows_new_migration_above_base_max(self) -> None:
         with fixture_repo() as repo:
-            write(repo / "services/auth-api/src/main/resources/db/migration/V3__new.sql", "select 3;\n")
+            write(repo / "services/example-api/src/main/resources/db/migration/V3__new.sql", "select 3;\n")
             run(["git", "add", "."], repo)
             self.assertEqual(main(["--base-ref", "base"]), 0)
 
     def test_rejects_duplicate_versions_across_split_dirs(self) -> None:
         with fixture_repo() as repo:
-            write(repo / "services/auth-api/src/main/resources/db/migration-pg/V2__pg.sql", "select 2;\n")
+            write(repo / "services/example-api/src/main/resources/db/migration-pg/V2__pg.sql", "select 2;\n")
             run(["git", "add", "."], repo)
             self.assertEqual(main(["--base-ref", "base"]), 1)
 

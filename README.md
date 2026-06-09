@@ -102,6 +102,47 @@ Inputs:
 | `npm-scope` | `@extratoast` | npm scope resolved from GitHub Packages when `github-packages-token` is set. |
 | `github-packages-registry` | `https://npm.pkg.github.com` | npm registry URL used for the configured GitHub Packages scope. |
 
+### `compose-system-test-stack`
+
+Design-first skeleton for a future Docker Compose CI/system-test stack helper.
+It exposes the planned input surface for compose file lists, selected services,
+wait strategies, diagnostics, cleanup, and optional migration checks, but it
+does not start Docker Compose services yet.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: ExtraToast/github-workflows/actions/compose-system-test-stack@v0.3.0
+    with:
+      placeholder-ack: 'true'
+      compose-files: |-
+        docker-compose.yml
+        docker-compose.ci.yml
+      services: api frontend db
+      wait-strategy: routes
+      wait-routes-file: .github/system-test-routes.txt
+      diagnostics-command: .github/scripts/dump-compose-diagnostics.sh
+      migration-check-command: .github/scripts/verify-migrations.sh
+```
+
+Inputs:
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `compose-files` | `docker-compose.yml`, `docker-compose.ci.yml` | Newline-separated compose files owned by the caller repository. |
+| `services` | empty | Space-separated services a future implementation should start. |
+| `project-name` | empty | Optional Docker Compose project name. |
+| `working-directory` | `.` | Directory containing compose files and hook scripts. |
+| `wait-strategy` | `compose-wait` | Planned wait mode: `compose-wait`, `command`, `routes`, or `none`. |
+| `wait-command` | empty | Caller-owned command for `wait-strategy=command`. |
+| `wait-routes-file` | empty | Caller-owned route list for `wait-strategy=routes`. |
+| `migration-check-command` | empty | Optional caller-owned migration verification command. |
+| `diagnostics-command` | empty | Optional caller-owned diagnostics command for failures. |
+| `cleanup-command` | empty | Optional caller-owned cleanup command. |
+| `up-args` | `--no-build --wait --timeout 300` | Planned extra `docker compose up` arguments. |
+| `down-on-complete` | `true` | Whether a future implementation should tear the stack down. |
+| `placeholder-ack` | `false` | Must be `true` to exercise this placeholder; otherwise the action fails. |
+
 ## Reusable workflows
 
 ### `migration-guard.yml`
@@ -131,9 +172,11 @@ Inputs:
 
 ### `crac-train.yml`
 
-Builds CRaC training Docker targets, runs them with Postgres, Valkey, and
-RabbitMQ sidecars, validates that a checkpoint was produced, and uploads one
-checkpoint artifact per service.
+Builds CRaC training Docker targets, runs them with per-service optional
+Postgres, Valkey, and RabbitMQ sidecars, validates that a checkpoint was
+produced, and uploads one checkpoint artifact per service. Matrix rows that do
+not declare `sidecars` keep the original round-2 behavior and start all three
+sidecars.
 
 ```yaml
 jobs:
@@ -149,7 +192,14 @@ jobs:
             "db_name": "example_db",
             "db_user": "example_user",
             "db_password": "example_password",
-            "port": 8080
+            "port": 8080,
+            "sidecars": ["postgres", "valkey"]
+          },
+          {
+            "service": "worker",
+            "context": ".",
+            "dockerfile": "services/worker/Dockerfile",
+            "sidecars": "none"
           }
         ]
       docker-target: train
@@ -172,6 +222,19 @@ Inputs:
 | `valkey-image` | `valkey/valkey:7-alpine` | Valkey sidecar image. |
 | `rabbitmq-image` | `rabbitmq:3-management-alpine` | RabbitMQ sidecar image. |
 | `extra-docker-run-args` | empty | Extra arguments appended before the training image tag. |
+
+Matrix fields:
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `service` | required | Service name used for the local image tag and checkpoint artifact prefix. |
+| `context` | `.` | Docker build context. |
+| `dockerfile` | required | Dockerfile path in the caller repository. |
+| `db_name` | `service` | Postgres database name when the Postgres sidecar is enabled. |
+| `db_user` | `postgres` | Postgres username when the Postgres sidecar is enabled. |
+| `db_password` | `postgres` | Postgres password when the Postgres sidecar is enabled. |
+| `port` | empty | Optional `SERVER_PORT` passed to the training container. |
+| `sidecars` | all three | String or list containing `postgres`, `valkey`, `rabbitmq`, or `none`. Missing keeps the backward-compatible full topology; `[]`, `none`, or `["none"]` starts no sidecars. |
 
 ### `production-canary.yml`
 

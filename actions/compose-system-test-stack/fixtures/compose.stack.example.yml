@@ -1,0 +1,44 @@
+services:
+  app:
+    image: ${SYSTEM_TEST_APP_IMAGE:-system-test-app:local}
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/app
+      CACHE_URL: redis://cache:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    ports:
+      - "${SYSTEM_TEST_APP_PORT:-8080}:8080"
+
+  worker:
+    image: ${SYSTEM_TEST_WORKER_IMAGE:-system-test-worker:local}
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/app
+      CACHE_URL: redis://cache:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+
+  db:
+    image: ${SYSTEM_TEST_POSTGRES_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  cache:
+    image: ${SYSTEM_TEST_VALKEY_IMAGE:-valkey/valkey:7-alpine}
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
