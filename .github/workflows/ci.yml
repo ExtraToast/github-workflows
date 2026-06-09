@@ -30,10 +30,10 @@ jobs:
 
       - name: Install actionlint
         env:
-          ACTIONLINT_VERSION: 1.7.7
+          ACTIONLINT_VERSION: 1.7.12
         run: |
-          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tar.gz
-          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash -o /tmp/download-actionlint.bash
+          bash /tmp/download-actionlint.bash "$ACTIONLINT_VERSION" /tmp
           sudo install /tmp/actionlint /usr/local/bin/actionlint
 
       - name: Lint workflows
