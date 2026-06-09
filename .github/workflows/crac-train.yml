@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       service-matrix:
-        description: JSON matrix include list with service, context, dockerfile, db_name, db_user, db_password, and port.
+        description: JSON matrix include list with service, context, dockerfile, optional db fields, port, and sidecars.
         required: true
         type: string
       docker-target:
@@ -64,42 +64,138 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(inputs.service-matrix) }}
-    services:
-      postgres:
-        image: ${{ inputs.postgres-image }}
-        env:
-          POSTGRES_DB: ${{ matrix.db_name }}
-          POSTGRES_USER: ${{ matrix.db_user }}
-          POSTGRES_PASSWORD: ${{ matrix.db_password }}
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      valkey:
-        image: ${{ inputs.valkey-image }}
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      rabbitmq:
-        image: ${{ inputs.rabbitmq-image }}
-        ports:
-          - 5672:5672
-        options: >-
-          --health-cmd "rabbitmq-diagnostics ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v6
 
       - uses: docker/setup-buildx-action@v4
+
+      - name: Resolve requested sidecars
+        id: sidecars
+        env:
+          SIDECARS_JSON: ${{ toJSON(matrix.sidecars) }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import sys
+
+          allowed = {"postgres", "valkey", "rabbitmq"}
+          raw = os.environ.get("SIDECARS_JSON", "null")
+
+          if raw in {"", "null"}:
+              requested = ["postgres", "valkey", "rabbitmq"]
+          else:
+              value = json.loads(raw)
+              if isinstance(value, str):
+                  requested = [part for part in value.replace(",", " ").split() if part]
+              elif isinstance(value, list):
+                  requested = value
+              else:
+                  print(f"::error::matrix.sidecars must be a string or list, got {type(value).__name__}", file=sys.stderr)
+                  sys.exit(1)
+
+          normalized = [str(item).strip().lower() for item in requested if str(item).strip()]
+          if not normalized:
+              normalized = ["none"]
+
+          unknown = sorted(set(normalized) - allowed - {"none"})
+          if unknown:
+              print(f"::error::Unsupported CRaC sidecar(s): {', '.join(unknown)}", file=sys.stderr)
+              print("::error::Supported values are postgres, valkey, rabbitmq, and none.", file=sys.stderr)
+              sys.exit(1)
+
+          if "none" in normalized and len(set(normalized)) > 1:
+              print("::error::CRaC sidecar value 'none' cannot be combined with other sidecars.", file=sys.stderr)
+              sys.exit(1)
+
+          enabled = set() if "none" in normalized else set(normalized)
+          ordered = [name for name in ["postgres", "valkey", "rabbitmq"] if name in enabled]
+
+          print(f"postgres={str('postgres' in enabled).lower()}")
+          print(f"valkey={str('valkey' in enabled).lower()}")
+          print(f"rabbitmq={str('rabbitmq' in enabled).lower()}")
+          print(f"list={','.join(ordered) if ordered else 'none'}")
+          PY
+
+      - name: Start Postgres sidecar
+        if: steps.sidecars.outputs.postgres == 'true'
+        env:
+          POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+          DB_NAME: ${{ matrix.db_name || matrix.service }}
+          DB_USER: ${{ matrix.db_user || 'postgres' }}
+          DB_PASSWORD: ${{ matrix.db_password || 'postgres' }}
+        run: |
+          set -euo pipefail
+
+          docker rm -f crac-postgres >/dev/null 2>&1 || true
+          docker run -d \
+            --name crac-postgres \
+            -e POSTGRES_DB="${DB_NAME}" \
+            -e POSTGRES_USER="${DB_USER}" \
+            -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
+            -p 5432:5432 \
+            "${POSTGRES_IMAGE}"
+
+          for _ in $(seq 1 60); do
+            if docker exec crac-postgres pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs crac-postgres || true
+          echo "::error::Postgres sidecar did not become healthy."
+          exit 1
+
+      - name: Start Valkey sidecar
+        if: steps.sidecars.outputs.valkey == 'true'
+        env:
+          VALKEY_IMAGE: ${{ inputs.valkey-image }}
+        run: |
+          set -euo pipefail
+
+          docker rm -f crac-valkey >/dev/null 2>&1 || true
+          docker run -d \
+            --name crac-valkey \
+            -p 6379:6379 \
+            "${VALKEY_IMAGE}"
+
+          for _ in $(seq 1 60); do
+            if docker exec crac-valkey valkey-cli ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs crac-valkey || true
+          echo "::error::Valkey sidecar did not become healthy."
+          exit 1
+
+      - name: Start RabbitMQ sidecar
+        if: steps.sidecars.outputs.rabbitmq == 'true'
+        env:
+          RABBITMQ_IMAGE: ${{ inputs.rabbitmq-image }}
+        run: |
+          set -euo pipefail
+
+          docker rm -f crac-rabbitmq >/dev/null 2>&1 || true
+          docker run -d \
+            --name crac-rabbitmq \
+            -p 5672:5672 \
+            "${RABBITMQ_IMAGE}"
+
+          for _ in $(seq 1 60); do
+            if docker exec crac-rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs crac-rabbitmq || true
+          echo "::error::RabbitMQ sidecar did not become healthy."
+          exit 1
 
       - name: Build training image
         uses: docker/build-push-action@v7
@@ -118,9 +214,12 @@ jobs:
       - name: Run training
         env:
           CHECKPOINT_PATH: ${{ inputs.checkpoint-path }}
-          DB_USER: ${{ matrix.db_user }}
-          DB_PASSWORD: ${{ matrix.db_password }}
-          SERVER_PORT: ${{ matrix.port }}
+          POSTGRES_ENABLED: ${{ steps.sidecars.outputs.postgres }}
+          VALKEY_ENABLED: ${{ steps.sidecars.outputs.valkey }}
+          RABBITMQ_ENABLED: ${{ steps.sidecars.outputs.rabbitmq }}
+          DB_USER: ${{ matrix.db_user || 'postgres' }}
+          DB_PASSWORD: ${{ matrix.db_password || 'postgres' }}
+          SERVER_PORT: ${{ matrix.port || '' }}
           EXPECTED_EXIT_CODES: ${{ inputs.expected-exit-codes }}
           EXTRA_DOCKER_RUN_ARGS: ${{ inputs.extra-docker-run-args }}
         run: |
@@ -129,23 +228,45 @@ jobs:
           mkdir -p checkpoint
           chmod 777 checkpoint
 
+          docker_env_args=()
+          if [ "$POSTGRES_ENABLED" = "true" ]; then
+            docker_env_args+=(
+              -e DB_HOST=localhost
+              -e DB_PORT=5432
+              -e DB_USER="${DB_USER}"
+              -e DB_PASSWORD="${DB_PASSWORD}"
+            )
+          fi
+          if [ "$VALKEY_ENABLED" = "true" ]; then
+            docker_env_args+=(
+              -e VALKEY_HOST=localhost
+              -e VALKEY_PORT=6379
+            )
+          fi
+          if [ "$RABBITMQ_ENABLED" = "true" ]; then
+            docker_env_args+=(
+              -e SPRING_RABBITMQ_HOST=localhost
+              -e SPRING_RABBITMQ_PORT=5672
+              -e SPRING_RABBITMQ_USERNAME=guest
+              -e SPRING_RABBITMQ_PASSWORD=guest
+            )
+          fi
+          if [ -n "$SERVER_PORT" ]; then
+            docker_env_args+=(-e SERVER_PORT="${SERVER_PORT}")
+          fi
+
+          extra_args=()
+          if [ -n "$EXTRA_DOCKER_RUN_ARGS" ]; then
+            read -r -a extra_args <<< "$EXTRA_DOCKER_RUN_ARGS"
+          fi
+
           set +e
           docker run --rm \
             --privileged \
             --network=host \
             -v "$PWD/checkpoint:${CHECKPOINT_PATH}" \
-            -e DB_HOST=localhost \
-            -e DB_PORT=5432 \
-            -e DB_USER="${DB_USER}" \
-            -e DB_PASSWORD="${DB_PASSWORD}" \
-            -e VALKEY_HOST=localhost \
-            -e VALKEY_PORT=6379 \
-            -e SPRING_RABBITMQ_HOST=localhost \
-            -e SPRING_RABBITMQ_PORT=5672 \
-            -e SPRING_RABBITMQ_USERNAME=guest \
-            -e SPRING_RABBITMQ_PASSWORD=guest \
-            -e SERVER_PORT="${SERVER_PORT}" \
-            "${EXTRA_DOCKER_RUN_ARGS}" \
+            "${docker_env_args[@]}" \
+            "${extra_args[@]}" \
             ${{ matrix.service }}-crac-train:local
           exit_code=$?
           set -e
@@ -165,6 +286,11 @@ jobs:
 
           echo "::error::training container exited ${exit_code}; expected one of: ${EXPECTED_EXIT_CODES}"
           exit "$exit_code"
+
+      - name: Stop sidecars
+        if: always()
+        run: |
+          docker rm -f crac-postgres crac-valkey crac-rabbitmq >/dev/null 2>&1 || true
 
       - uses: actions/upload-artifact@v7
         with:
