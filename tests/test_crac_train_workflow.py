@@ -12,10 +12,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CRAC_WORKFLOW = ROOT / ".github/workflows/crac-train.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+PLATFORM_CONFIG_WORKFLOW = ROOT / ".github/workflows/platform-config-validate.yml"
 COMPOSE_ACTION = ROOT / "actions/compose-system-test-stack/action.yml"
 COMPOSE_RUNNER = ROOT / "actions/compose-system-test-stack/run.sh"
 COMPOSE_ROUTES_FIXTURE = ROOT / "actions/compose-system-test-stack/fixtures/routes.example.txt"
 COMPOSE_STACK_FIXTURE = ROOT / "actions/compose-system-test-stack/fixtures/compose.stack.example.yml"
+PLATFORM_CONFIG_ACTION = ROOT / "actions/platform-config-validate/action.yml"
+PLATFORM_CONFIG_RUNNER = ROOT / "actions/platform-config-validate/run.sh"
+PLATFORM_CONFIG_PLATFORM_FIXTURE = ROOT / "actions/platform-config-validate/fixtures/platform.example.yml"
+PLATFORM_CONFIG_SERVICE_FIXTURE = ROOT / "actions/platform-config-validate/fixtures/service-intent.example.yml"
 README = ROOT / "README.md"
 
 
@@ -311,6 +317,189 @@ class ComposeSystemTestStackActionTest(unittest.TestCase):
 
         self.assertIn("${SYSTEM_TEST_APP_BASE_URL}", routes)
         self.assertIn("${SYSTEM_TEST_APP_IMAGE", compose)
+
+
+class PlatformConfigValidateSurfaceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workflow = PLATFORM_CONFIG_WORKFLOW.read_text(encoding="utf-8")
+        cls.action = PLATFORM_CONFIG_ACTION.read_text(encoding="utf-8")
+        cls.runner = PLATFORM_CONFIG_RUNNER.read_text(encoding="utf-8")
+        cls.readme = README.read_text(encoding="utf-8")
+        cls.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def write_executable(self, path: Path, body: str) -> None:
+        path.write_text(textwrap.dedent(body), encoding="utf-8")
+        path.chmod(0o755)
+
+    def install_fake_npm(self, bin_dir: Path) -> None:
+        self.write_executable(
+            bin_dir / "npm",
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            printf 'npm' >> "$COMMAND_LOG"
+            printf ' <%s>' "$@" >> "$COMMAND_LOG"
+            printf '\\n' >> "$COMMAND_LOG"
+
+            case "${1:-}" in
+              init)
+                printf '{}\\n' > package.json
+                ;;
+              install)
+                package_dir="node_modules/@extratoast/deploy-config-schema"
+                mkdir -p "$package_dir"
+                cat > "$package_dir/package.json" <<'JSON'
+            {"bin":{"deploy-config-schema":"cli.js"}}
+            JSON
+                cat > "$package_dir/cli.js" <<'JS'
+            #!/usr/bin/env node
+            const fs = require("fs");
+            const args = process.argv.slice(2);
+            fs.appendFileSync(process.env.COMMAND_LOG, `cli ${args.map((arg) => `<${arg}>`).join(" ")}\\n`);
+            if (args[0] === "validate" && process.env.CLI_VALIDATE_EXIT) {
+              process.exit(Number(process.env.CLI_VALIDATE_EXIT));
+            }
+            if (args[0] === "render-tree" && process.env.CLI_DRIFT_EXIT) {
+              process.exit(Number(process.env.CLI_DRIFT_EXIT));
+            }
+            JS
+                chmod +x "$package_dir/cli.js"
+                ;;
+            esac
+            """,
+        )
+
+    def run_platform_config_action(
+        self,
+        workdir: Path,
+        env_overrides: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        bin_dir = workdir / "bin"
+        runner_temp = workdir / "runner-temp"
+        repo_dir = workdir / "repo"
+        bin_dir.mkdir(exist_ok=True)
+        runner_temp.mkdir(exist_ok=True)
+        repo_dir.mkdir(exist_ok=True)
+
+        command_log = workdir / "commands.log"
+        self.install_fake_npm(bin_dir)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                "COMMAND_LOG": str(command_log),
+                "RUNNER_TEMP": str(runner_temp),
+                "CONFIG_PATHS": "platform/**/*.yaml\nplatform/**/*.yml",
+                "SCHEMA_KIND": "auto",
+                "PACKAGE_VERSION": "0.3.0",
+                "DRIFT_CHECK": "false",
+                "WORKING_DIRECTORY": str(repo_dir),
+            }
+        )
+        env.update(env_overrides)
+
+        return subprocess.run(
+            [str(PLATFORM_CONFIG_RUNNER)],
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def test_reusable_workflow_exposes_expected_inputs_and_wraps_action(self) -> None:
+        expected_inputs = [
+            "config-paths",
+            "schema-kind",
+            "package-version",
+            "drift-check",
+            "working-directory",
+        ]
+        for expected_input in expected_inputs:
+            self.assertIn(f"      {expected_input}:", self.workflow)
+            self.assertIn(f"  {expected_input}:", self.action)
+
+        self.assertIn("on:\n  workflow_call:", self.workflow)
+        self.assertIn("uses: ./.github-workflows/actions/platform-config-validate", self.workflow)
+        self.assertIn("repository: ExtraToast/github-workflows", self.workflow)
+        self.assertIn("actions/setup-node@v6", self.action)
+        self.assertIn('run: bash "${{ github.action_path }}/run.sh"', self.action)
+
+    def test_action_supports_schema_kinds_package_pin_and_drift_check(self) -> None:
+        self.assertIn("default: 0.3.0", self.action)
+        self.assertIn("platform|deploy-config|service-intent|fleet-inventory|vault-dynamic-secrets|auto", self.runner)
+        self.assertIn('"$cli_bin" validate "$schema_kind"', self.runner)
+        self.assertIn('"$cli_bin" validate', self.runner)
+        self.assertIn('"$cli_bin" render-tree "$drift_file" --check', self.runner)
+
+    def test_runner_expands_globs_installs_package_and_runs_drift_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workdir = Path(temp)
+            repo_dir = workdir / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "platform").mkdir()
+            (repo_dir / "intents").mkdir()
+            (repo_dir / "platform/app.yml").write_text("kind: platform\n", encoding="utf-8")
+            (repo_dir / "platform/cluster.yaml").write_text("kind: platform\n", encoding="utf-8")
+            (repo_dir / "intents/api.yaml").write_text("kind: service-intent\n", encoding="utf-8")
+
+            result = self.run_platform_config_action(
+                workdir,
+                {
+                    "WORKING_DIRECTORY": str(repo_dir),
+                    "CONFIG_PATHS": "platform/*.yml\nplatform/*.yaml\nintents/*.yaml",
+                    "SCHEMA_KIND": "platform",
+                    "PACKAGE_VERSION": "9.8.7",
+                    "DRIFT_CHECK": "true",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            log = (workdir / "commands.log").read_text(encoding="utf-8")
+            self.assertIn("npm <install> <--no-audit> <--no-fund> <--save-exact> <@extratoast/deploy-config-schema@9.8.7>", log)
+            self.assertIn(
+                "cli <validate> <platform> <platform/app.yml> <platform/cluster.yaml> <intents/api.yaml>",
+                log,
+            )
+            self.assertIn(
+                "cli <render-tree> <platform/app.yml> <--check>",
+                log,
+            )
+
+    def test_runner_fails_clearly_when_no_configs_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workdir = Path(temp)
+            repo_dir = workdir / "repo"
+            repo_dir.mkdir()
+
+            result = self.run_platform_config_action(
+                workdir,
+                {
+                    "WORKING_DIRECTORY": str(repo_dir),
+                    "CONFIG_PATHS": "platform/**/*.yaml",
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("No config files matched config-paths", result.stdout)
+
+    def test_generic_fixtures_and_readme_usage_are_present(self) -> None:
+        platform_fixture = PLATFORM_CONFIG_PLATFORM_FIXTURE.read_text(encoding="utf-8")
+        service_fixture = PLATFORM_CONFIG_SERVICE_FIXTURE.read_text(encoding="utf-8")
+
+        self.assertIn("name: example-platform", platform_fixture)
+        self.assertIn("api-service:", service_fixture)
+        self.assertIn("platform-config-validate.yml", self.readme)
+        self.assertIn("ExtraToast/github-workflows/.github/workflows/platform-config-validate.yml", self.readme)
+        self.assertIn("@extratoast/deploy-config-schema", self.readme)
+
+    def test_ci_uses_official_actionlint_download_script(self) -> None:
+        self.assertIn("download-actionlint.bash", self.ci)
+        self.assertIn("raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash", self.ci)
+        self.assertNotIn("rhysd/actionlint@v1", self.ci)
 
 
 if __name__ == "__main__":

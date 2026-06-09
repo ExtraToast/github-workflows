@@ -102,6 +102,34 @@ Inputs:
 | `npm-scope` | `@extratoast` | npm scope resolved from GitHub Packages when `github-packages-token` is set. |
 | `github-packages-registry` | `https://npm.pkg.github.com` | npm registry URL used for the configured GitHub Packages scope. |
 
+### `platform-config-validate`
+
+Installs a pinned `@extratoast/deploy-config-schema` package, validates caller
+YAML configs, and can run `render-tree --check` to catch rendered-tree drift.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: ExtraToast/github-workflows/actions/platform-config-validate@v0.5.0
+    with:
+      config-paths: |-
+        platform/**/*.yaml
+        platform/**/*.yml
+      schema-kind: auto
+      package-version: 0.3.0
+      drift-check: 'true'
+```
+
+Inputs:
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `config-paths` | `platform/**/*.yaml`, `platform/**/*.yml` | Newline- or comma-separated file globs to validate. |
+| `schema-kind` | `auto` | Schema kind: `platform`, `deploy-config`, `service-intent`, `fleet-inventory`, `vault-dynamic-secrets`, or `auto`. |
+| `package-version` | `0.3.0` | Version of `@extratoast/deploy-config-schema` to install. |
+| `drift-check` | `false` | Runs `render-tree --check` after validation when set to `true`. |
+| `working-directory` | `.` | Directory where config globs are evaluated. |
+
 ### `compose-system-test-stack`
 
 Runs a caller-owned Docker Compose CI/system-test stack, waits for service
@@ -152,6 +180,35 @@ Inputs:
 | `down-on-complete` | `true` | Whether to run `docker compose down --remove-orphans` after the stack step completes. |
 
 ## Reusable workflows
+
+### `platform-config-validate.yml`
+
+Validates platform YAML from any consumer repository with one reusable workflow
+job. This is the preferred entry point when the repository only needs the
+standard validation job.
+
+```yaml
+jobs:
+  platform-config:
+    uses: ExtraToast/github-workflows/.github/workflows/platform-config-validate.yml@v0.5.0
+    with:
+      config-paths: |-
+        platform/**/*.yaml
+        platform/**/*.yml
+      schema-kind: auto
+      package-version: 0.3.0
+      drift-check: true
+```
+
+Inputs:
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `config-paths` | `platform/**/*.yaml`, `platform/**/*.yml` | Newline- or comma-separated file globs to validate. |
+| `schema-kind` | `auto` | Schema kind: `platform`, `deploy-config`, `service-intent`, `fleet-inventory`, `vault-dynamic-secrets`, or `auto`. |
+| `package-version` | `0.3.0` | Version of `@extratoast/deploy-config-schema` to install. |
+| `drift-check` | `false` | Runs `render-tree --check` after validation when set to `true`. |
+| `working-directory` | `.` | Directory where config globs are evaluated. |
 
 ### `migration-guard.yml`
 
