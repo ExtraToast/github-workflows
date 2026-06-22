@@ -56,7 +56,7 @@ jobs:
     name: JVM Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve workflow ref
         id: workflow-ref
@@ -74,7 +74,7 @@ jobs:
 
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: ExtraToast/github-workflows
           ref: ${{ steps.workflow-ref.outputs.ref }}
@@ -95,7 +95,7 @@ jobs:
     name: JVM Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve workflow ref
         id: workflow-ref
@@ -113,7 +113,7 @@ jobs:
 
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: ExtraToast/github-workflows
           ref: ${{ steps.workflow-ref.outputs.ref }}
